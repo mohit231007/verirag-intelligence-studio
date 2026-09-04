@@ -48,11 +48,18 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
     with columns[3]:
         st.metric("Total latency", f"{latest.total_ms / 1_000:.2f}s")
     with columns[4]:
-        _metric(
-            "LLM faithfulness",
-            latest.metrics.get("llm_faithfulness"),
-            "Optional claim-support judgment run only when requested.",
-        )
+        if latest.metrics.get("llm_faithfulness_status") == "not_applicable":
+            st.metric(
+                "LLM faithfulness",
+                "N/A",
+                help="No model-generated answer was available to audit.",
+            )
+        else:
+            _metric(
+                "LLM faithfulness",
+                latest.metrics.get("llm_faithfulness"),
+                "Optional claim-support judgment. For a citation refusal, it audits the rejected draft.",
+            )
 
     if st.button("Run faithfulness judge", help="Uses one additional model request for the latest answer."):
         try:
@@ -61,7 +68,13 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
             latest.metrics["llm_faithfulness"] = judgment.score
             latest.metrics["unsupported_claims"] = list(judgment.unsupported_claims)
             latest.metrics["judge_reasoning"] = judgment.reasoning
-            st.success(f"Faithfulness judge completed: {judgment.score:.0%}")
+            if judgment.score is None:
+                latest.metrics["llm_faithfulness_status"] = "not_applicable"
+                st.info(judgment.reasoning)
+            else:
+                latest.metrics["llm_faithfulness_status"] = "completed"
+                label = "Rejected draft" if latest.is_refusal else "Answer"
+                st.success(f"{label} faithfulness judge completed: {judgment.score:.0%}")
         except ProviderError as exc:
             st.error(str(exc))
 
@@ -89,6 +102,8 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
                 "model": latest.model,
                 "refusal_reason": latest.refusal_reason,
                 "invalid_citations": latest.invalid_citations,
+                "citation_validation_error": latest.citation_validation_error,
+                "citation_repair_attempted": latest.citation_repair_attempted,
                 "metrics": latest.metrics,
             }
         )

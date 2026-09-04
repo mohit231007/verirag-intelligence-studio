@@ -51,6 +51,9 @@ class QueryTrace:
     provider: str = ""
     model: str = ""
     invalid_citations: list[str] = field(default_factory=list)
+    generated_answer: str | None = None
+    citation_validation_error: str | None = None
+    citation_repair_attempted: bool = False
     metrics: dict[str, Any] = field(default_factory=dict)
 
 

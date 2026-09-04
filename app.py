@@ -269,6 +269,8 @@ with chat_tab:
                             "provider": latest.provider,
                             "model": latest.model,
                             "refusal_reason": latest.refusal_reason,
+                            "citation_validation_error": latest.citation_validation_error,
+                            "citation_repair_attempted": latest.citation_repair_attempted,
                             "metrics": latest.metrics,
                         }
                     )
@@ -291,7 +293,7 @@ with about_tab:
         2. A session-specific Chroma collection prevents document mixing between visitors.
         3. Retrieval must cross the configured cosine-similarity gate before generation is allowed.
         4. Document text is fenced as untrusted evidence and cannot redefine system instructions.
-        5. Generated source IDs are validated; missing or invented citations trigger a safe refusal.
+        5. Generated citations are normalized and validated; one bounded repair is attempted before a safe refusal.
         6. Every completed query retains a local trace with evidence and latency diagnostics.
 
         This design reduces unsupported answers; it does not claim that any probabilistic model can guarantee zero hallucinations.

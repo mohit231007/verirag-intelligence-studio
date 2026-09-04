@@ -18,18 +18,24 @@ class FakeProvider:
     name = "fake"
     model = "deterministic"
 
-    def __init__(self, answer):
+    def __init__(self, answer, repair_answer=None):
         self.answer = answer
+        self.repair_answer = repair_answer if repair_answer is not None else answer
         self.calls = 0
 
     def complete(self, system_prompt, user_prompt, *, temperature=0.0):
         self.calls += 1
-        return self.answer
+        return self.answer if self.calls == 1 else self.repair_answer
 
 
 def evidence(score=0.8):
     chunk = DocumentChunk("hash_p1_c1", "hash", "policy.txt", 1, "Campaign starts in October.", 0, 27)
     return RetrievedChunk(chunk, score, 1)
+
+
+def second_evidence(score=0.45):
+    chunk = DocumentChunk("hash_p2_c1", "hash", "policy.txt", 2, "Campaign ends in November.", 0, 26)
+    return RetrievedChunk(chunk, score, 2)
 
 
 def test_low_similarity_refuses_without_generation() -> None:
@@ -57,3 +63,45 @@ def test_missing_or_invented_citation_fails_closed() -> None:
         trace = engine.execute("When does it start?")
         assert trace.answer == CITATION_FAILURE
         assert trace.is_refusal
+        assert trace.citation_repair_attempted
+
+
+def test_citation_variants_are_canonicalized() -> None:
+    provider = FakeProvider("The campaign starts in October [Source 1].")
+    engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
+    trace = engine.execute("When does it start?")
+    assert trace.answer == "The campaign starts in October [S1]."
+    assert not trace.is_refusal
+
+
+def test_invalid_first_draft_is_repaired_once() -> None:
+    provider = FakeProvider(
+        "The campaign starts in October.",
+        "The campaign starts in October [S1].",
+    )
+    engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
+    trace = engine.execute("When does it start?")
+    assert trace.answer == "The campaign starts in October [S1]."
+    assert trace.citation_repair_attempted
+    assert provider.calls == 2
+
+
+def test_partially_cited_draft_is_repaired_once() -> None:
+    provider = FakeProvider(
+        "It starts in October. It ends in November [S1].",
+        "It starts in October [S1]. It ends in November [S1].",
+    )
+    engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
+    trace = engine.execute("What is the campaign window?")
+    assert not trace.is_refusal
+    assert trace.metrics["citation_coverage"] == 1.0
+    assert provider.calls == 2
+
+
+def test_configured_similarity_gate_is_the_only_evidence_floor() -> None:
+    provider = FakeProvider("It starts in October [S1] and ends in November [S2].")
+    config = AppConfig(top_k=2, similarity_threshold=0.4)
+    engine = RAGEngine(FakeStore([evidence(), second_evidence()]), provider, config)
+    trace = engine.execute("What is the campaign window?")
+    assert len(trace.retrieved) == 2
+    assert not trace.is_refusal
