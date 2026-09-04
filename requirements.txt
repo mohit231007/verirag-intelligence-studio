@@ -1,0 +1,10 @@
+streamlit>=1.38,<2
+chromadb>=0.5,<2
+fastembed>=0.3,<1
+groq>=0.11,<1
+pypdf>=4.3,<7
+python-docx>=1.1,<2
+pandas>=2.2,<4
+python-dotenv>=1.0,<2
+reportlab>=4.2,<5
+socksio>=1.0,<2
