@@ -39,7 +39,7 @@ class AppConfig:
     app_name: str = "VeriRAG Studio"
     provider: str = "groq"
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-120b"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:3b"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
@@ -75,7 +75,7 @@ def load_config() -> AppConfig:
     return AppConfig(
         provider=provider,
         groq_api_key=os.getenv("GROQ_API_KEY", "").strip(),
-        groq_model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip(),
+        groq_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip(),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
         ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip(),
         embedding_model=os.getenv(

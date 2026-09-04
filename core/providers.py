@@ -15,6 +15,23 @@ class ProviderError(RuntimeError):
     """A sanitized error safe to display in the application."""
 
 
+def groq_error_message(error: Exception) -> str:
+    """Translate Groq HTTP failures without exposing credentials or response bodies."""
+
+    status = getattr(error, "status_code", None)
+    if status == 400:
+        return "Groq rejected the request. Check that the configured model is active for your account."
+    if status == 401:
+        return "Groq authentication failed. Check that GROQ_API_KEY is complete, active, and saved in .env."
+    if status == 403:
+        return "Groq denied access to this model. Select a model enabled for your Groq project."
+    if status == 404:
+        return "The configured Groq model is unavailable. Update GROQ_MODEL to an active model ID."
+    if status == 429:
+        return "Groq rate or usage limit reached. Wait briefly, then retry or review your Groq project limits."
+    return "Groq request failed. Check network access and your Groq project status."
+
+
 class ChatProvider(Protocol):
     name: str
     model: str
@@ -51,7 +68,7 @@ class GroqProvider:
         except ProviderError:
             raise
         except Exception as exc:
-            raise ProviderError("Groq request failed. Check the API key, quota, and model setting.") from exc
+            raise ProviderError(groq_error_message(exc)) from exc
 
 
 @dataclass(slots=True)

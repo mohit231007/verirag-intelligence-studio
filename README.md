@@ -75,7 +75,7 @@ pytest -q
 | Variable | Default | Purpose |
 |---|---:|---|
 | `VERIRAG_PROVIDER` | `groq` | `groq` or `ollama` |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Cloud generation model |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq production generation model |
 | `OLLAMA_MODEL` | `llama3.2:3b` | Local generation model |
 | `VERIRAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | FastEmbed model |
 | `VERIRAG_SIMILARITY_THRESHOLD` | `0.40` | Minimum top cosine similarity |
