@@ -11,7 +11,7 @@ VeriRAG Studio is a bounded, auditable retrieval-augmented generation applicatio
 - **Evidence before generation:** the LLM is not called for an answer unless retrieval crosses a configurable similarity gate.
 - **Session isolation:** every browser session uses a separate Chroma collection, avoiding cross-user document leakage on a public demo.
 - **Prompt-injection resistance:** retrieved text is treated as untrusted evidence and fenced away from system instructions.
-- **Citation integrity:** every factual sentence or bullet must cite supplied IDs such as `[S1]`; formatting is normalized and repaired once before a failed validation triggers a safe refusal.
+- **Citation integrity:** every factual sentence or bullet must cite supplied IDs such as `[S1]`; a structured claim-to-source repair is attempted once before a failed validation triggers a safe refusal.
 - **Page-aware ingestion:** PDF pages and source metadata remain attached to deterministic chunks.
 - **Bounded resource use:** upload, page, file, CSV-row, context, and session-chunk limits protect free hosting tiers.
 - **Dual inference:** Groq for a public demo or Ollama for local/offline use.

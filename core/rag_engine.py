@@ -5,11 +5,16 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 
-from .citations import canonicalize_citations, extract_citation_ids
+from .citations import (
+    StructuredAnswerError,
+    canonicalize_citations,
+    extract_citation_ids,
+    parse_structured_answer,
+)
 from .config import AppConfig
 from .evaluator import citation_coverage, deterministic_metrics
 from .models import QueryTrace, RetrievedChunk
-from .providers import ChatProvider
+from .providers import ChatProvider, ProviderError
 from .vector_store import VectorStoreManager
 
 NO_DOCUMENTS = "Upload and process at least one supported document before asking a question."
@@ -36,9 +41,12 @@ Security and grounding rules:
 
 CITATION_REPAIR_PROMPT = """You repair citation formatting in a grounded draft.
 Use only the supplied evidence and preserve the draft's meaning. Do not add facts.
-Every factual sentence or bullet must end with one or more allowed source IDs.
-Use only the exact citation syntax [S1] or [S1] [S2]. Return only the revised answer.
-If a claim is not supported, remove it rather than inventing a citation."""
+Return JSON only, with exactly this shape:
+{"can_answer": true, "reason": "", "items": [{"claim": "one complete bullet without citation markup", "source_ids": ["S1"]}]}
+Every item must be one complete factual bullet and have at least one allowed source ID.
+Use only IDs from ALLOWED SOURCE IDS. Remove unsupported claims.
+If the evidence does not contain facts relevant to the question, return:
+{"can_answer": false, "reason": "brief explanation", "items": []}"""
 
 
 def _history_text(history: Sequence[dict[str, str]], limit: int = 3) -> str:
@@ -141,6 +149,7 @@ class RAGEngine:
         invalid = sorted({citation for citation in cited_ids if citation not in valid_ids})
         coverage = citation_coverage(answer)
         citation_repair_attempted = False
+        model_insufficient_reason = None
         if not cited_ids or invalid or coverage < 1.0:
             citation_repair_attempted = True
             allowed = ", ".join(f"[S{identifier}]" for identifier in sorted(valid_ids))
@@ -149,20 +158,34 @@ class RAGEngine:
                 f"ALLOWED SOURCE IDS:\n{allowed}\n\nDRAFT TO REPAIR:\n{generated_answer}"
             )
             try:
-                generated_answer = self.provider.complete(
+                repair_output = self.provider.complete(
                     CITATION_REPAIR_PROMPT,
                     repair_prompt,
                     temperature=0.0,
                 )
-                answer = canonicalize_citations(generated_answer)
-                cited_ids = extract_citation_ids(answer)
-                invalid = sorted({citation for citation in cited_ids if citation not in valid_ids})
-                coverage = citation_coverage(answer)
-            except Exception:
+                structured = parse_structured_answer(repair_output, valid_ids)
+                if structured.can_answer:
+                    generated_answer = structured.answer
+                    answer = structured.answer
+                    cited_ids = extract_citation_ids(answer)
+                    invalid = sorted(
+                        {citation for citation in cited_ids if citation not in valid_ids}
+                    )
+                    coverage = citation_coverage(answer)
+                else:
+                    model_insufficient_reason = structured.reason
+            except (StructuredAnswerError, ProviderError):
                 pass
 
         generation_ms = (time.perf_counter() - generation_started) * 1_000
-        if not cited_ids or invalid or coverage < 1.0:
+        if model_insufficient_reason is not None:
+            answer = INSUFFICIENT_EVIDENCE
+            validation_error = None
+            is_refusal = True
+            refusal_reason = "model_insufficient_evidence"
+            generated_answer = None
+            invalid = []
+        elif not cited_ids or invalid or coverage < 1.0:
             if not cited_ids:
                 validation_error = "missing_source_ids"
             elif invalid:

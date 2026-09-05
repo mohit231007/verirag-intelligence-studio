@@ -77,11 +77,12 @@ def test_citation_variants_are_canonicalized() -> None:
 def test_invalid_first_draft_is_repaired_once() -> None:
     provider = FakeProvider(
         "The campaign starts in October.",
-        "The campaign starts in October [S1].",
+        '{"can_answer":true,"reason":"","items":'
+        '[{"claim":"The campaign starts in October.","source_ids":["S1"]}]}',
     )
     engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
     trace = engine.execute("When does it start?")
-    assert trace.answer == "The campaign starts in October [S1]."
+    assert trace.answer == "- The campaign starts in October [S1]."
     assert trace.citation_repair_attempted
     assert provider.calls == 2
 
@@ -89,13 +90,26 @@ def test_invalid_first_draft_is_repaired_once() -> None:
 def test_partially_cited_draft_is_repaired_once() -> None:
     provider = FakeProvider(
         "It starts in October. It ends in November [S1].",
-        "It starts in October [S1]. It ends in November [S1].",
+        '{"can_answer":true,"reason":"","items":'
+        '[{"claim":"It starts in October and ends in November.","source_ids":["S1"]}]}',
     )
     engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
     trace = engine.execute("What is the campaign window?")
     assert not trace.is_refusal
     assert trace.metrics["citation_coverage"] == 1.0
     assert provider.calls == 2
+
+
+def test_repair_can_classify_semantically_insufficient_evidence() -> None:
+    provider = FakeProvider(
+        "The evidence does not describe data-science experience.",
+        '{"can_answer":false,"reason":"The supplied CV is about power operations.","items":[]}',
+    )
+    engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
+    trace = engine.execute("Summarize data-science experience")
+    assert trace.answer == INSUFFICIENT_EVIDENCE
+    assert trace.refusal_reason == "model_insufficient_evidence"
+    assert trace.citation_validation_error is None
 
 
 def test_configured_similarity_gate_is_the_only_evidence_floor() -> None:

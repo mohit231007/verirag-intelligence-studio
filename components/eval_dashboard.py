@@ -48,17 +48,20 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
     with columns[3]:
         st.metric("Total latency", f"{latest.total_ms / 1_000:.2f}s")
     with columns[4]:
+        faithfulness_metric = st.empty()
         if latest.metrics.get("llm_faithfulness_status") == "not_applicable":
-            st.metric(
+            faithfulness_metric.metric(
                 "LLM faithfulness",
                 "N/A",
                 help="No model-generated answer was available to audit.",
             )
         else:
-            _metric(
+            score = latest.metrics.get("llm_faithfulness")
+            display = "Not run" if score is None else f"{score:.0%}"
+            faithfulness_metric.metric(
                 "LLM faithfulness",
-                latest.metrics.get("llm_faithfulness"),
-                "Optional claim-support judgment. For a citation refusal, it audits the rejected draft.",
+                display,
+                help="Optional claim-support judgment. For a citation refusal, it audits the rejected draft.",
             )
 
     if st.button("Run faithfulness judge", help="Uses one additional model request for the latest answer."):
@@ -70,9 +73,19 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
             latest.metrics["judge_reasoning"] = judgment.reasoning
             if judgment.score is None:
                 latest.metrics["llm_faithfulness_status"] = "not_applicable"
+                faithfulness_metric.metric(
+                    "LLM faithfulness",
+                    "N/A",
+                    help="No model-generated answer was available to audit.",
+                )
                 st.info(judgment.reasoning)
             else:
                 latest.metrics["llm_faithfulness_status"] = "completed"
+                faithfulness_metric.metric(
+                    "LLM faithfulness",
+                    f"{judgment.score:.0%}",
+                    help="Optional claim-support judgment for the latest generated answer.",
+                )
                 label = "Rejected draft" if latest.is_refusal else "Answer"
                 st.success(f"{label} faithfulness judge completed: {judgment.score:.0%}")
         except ProviderError as exc:
