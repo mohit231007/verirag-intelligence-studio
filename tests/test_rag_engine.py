@@ -112,6 +112,29 @@ def test_repair_can_classify_semantically_insufficient_evidence() -> None:
     assert trace.citation_validation_error is None
 
 
+def test_first_generation_can_return_structured_answer_without_repair() -> None:
+    provider = FakeProvider(
+        '{"can_answer":true,"reason":"","items":'
+        '[{"claim":"The campaign starts in October.","source_ids":["S1"]}]}'
+    )
+    engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
+    trace = engine.execute("When does it start?")
+    assert trace.answer == "- The campaign starts in October [S1]."
+    assert not trace.citation_repair_attempted
+    assert provider.calls == 1
+
+
+def test_first_generation_can_classify_insufficient_evidence() -> None:
+    provider = FakeProvider(
+        '{"can_answer":false,"reason":"The evidence is unrelated.","items":[]}'
+    )
+    engine = RAGEngine(FakeStore([evidence()]), provider, AppConfig())
+    trace = engine.execute("Summarize data-science experience")
+    assert trace.refusal_reason == "model_insufficient_evidence"
+    assert not trace.citation_repair_attempted
+    assert provider.calls == 1
+
+
 def test_configured_similarity_gate_is_the_only_evidence_floor() -> None:
     provider = FakeProvider("It starts in October [S1] and ends in November [S2].")
     config = AppConfig(top_k=2, similarity_threshold=0.4)

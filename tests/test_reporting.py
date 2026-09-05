@@ -24,3 +24,18 @@ def test_answer_pdf_contains_question_answer_and_evidence() -> None:
     assert len(reader.pages) == 2
     assert "When does it start?" in text
     assert "The window starts in October" in text
+
+
+def test_answer_pdf_normalizes_unsupported_hyphens_and_wraps_long_query() -> None:
+    trace = QueryTrace(
+        query="Summarize data‑science experience and measurable achievements.",
+        standalone_query="Summarize " + "applied data science experience " * 15,
+        answer="- Built an end‑to‑end machine‑learning product [S1].",
+        provider="groq",
+        model="test",
+    )
+    output = build_answer_pdf(trace)
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(output)).pages)
+    assert "data-science" in text
+    assert "end-to-end machine-learning" in text
+    assert "■" not in text

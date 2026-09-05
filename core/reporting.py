@@ -14,9 +14,21 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, 
 
 from .models import QueryTrace
 
+_PDF_TRANSLATION = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+    }
+)
+
 
 def _safe_paragraph(text: str) -> str:
-    return escape(text).replace("\n", "<br/>")
+    return escape(text.translate(_PDF_TRANSLATION)).replace("\n", "<br/>")
 
 
 def build_answer_pdf(trace: QueryTrace) -> bytes:
@@ -41,6 +53,25 @@ def build_answer_pdf(trace: QueryTrace) -> bytes:
             textColor=colors.HexColor("#0B6357"),
             alignment=TA_CENTER,
             spaceAfter=4 * mm,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            "SummaryLabel",
+            parent=styles["BodyText"],
+            textColor=colors.white,
+            fontName="Helvetica",
+            fontSize=9,
+            leading=11,
+        )
+    )
+    styles.add(
+        ParagraphStyle(
+            "SummaryValue",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=9,
+            leading=11,
         )
     )
     styles.add(
@@ -77,12 +108,19 @@ def build_answer_pdf(trace: QueryTrace) -> bytes:
         Spacer(1, 5 * mm),
     ]
 
+    summary_values = [
+        ("Outcome", "Safe refusal" if trace.is_refusal else "Citation-validated"),
+        ("Confidence", trace.confidence),
+        ("Provider / model", f"{trace.provider} / {trace.model}"),
+        ("Total latency", f"{trace.total_ms / 1_000:.2f} seconds"),
+        ("Standalone retrieval query", trace.standalone_query),
+    ]
     summary = [
-        ["Outcome", "Safe refusal" if trace.is_refusal else "Citation-validated"],
-        ["Confidence", trace.confidence],
-        ["Provider / model", f"{trace.provider} / {trace.model}"],
-        ["Total latency", f"{trace.total_ms / 1_000:.2f} seconds"],
-        ["Standalone retrieval query", trace.standalone_query],
+        [
+            Paragraph(_safe_paragraph(label), styles["SummaryLabel"]),
+            Paragraph(_safe_paragraph(value), styles["SummaryValue"]),
+        ]
+        for label, value in summary_values
     ]
     table = Table(summary, colWidths=[45 * mm, 112 * mm])
     table.setStyle(
