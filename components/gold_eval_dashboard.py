@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import asdict, replace
 
 import pandas as pd
@@ -31,6 +32,7 @@ from core.gold_eval import (
 )
 from core.providers import ProviderError, clone_provider_with_model
 from core.rag_engine import RAGEngine
+from core.vector_store import VectorStoreManager
 
 _SAMPLE_GOLD = """# Load sample_docs/retail_promotion_policy.txt before running this template.
 {"case_id":"sample-window","query":"What is the frozen-food promotional window?","expected_answerable":true,"expected_answer":"The standard promotional window for frozen-food products begins on 15 October 2026 and ends on 28 November 2026.","expected_source_docs":["retail_promotion_policy.txt"],"tags":["answerable","date"]}
@@ -85,8 +87,10 @@ def _render_latest(run: BenchmarkRun) -> None:
     if efficiency:
         st.markdown("#### Efficiency and cost telemetry")
         cols = st.columns(5)
-        cols[0].metric("P50 latency", _number(efficiency.get("p50_latency_seconds"), 2) + "s")
-        cols[1].metric("P95 latency", _number(efficiency.get("p95_latency_seconds"), 2) + "s")
+        p50 = efficiency.get("p50_latency_seconds")
+        p95 = efficiency.get("p95_latency_seconds")
+        cols[0].metric("P50 latency", "N/A" if p50 is None else f"{float(p50):.2f}s")
+        cols[1].metric("P95 latency", "N/A" if p95 is None else f"{float(p95):.2f}s")
         cols[2].metric("Mean tokens", _number(efficiency.get("mean_total_tokens"), 0))
         cols[3].metric("Total tokens", _number(efficiency.get("total_tokens"), 0))
         total_cost = efficiency.get("total_estimated_cost_usd")
@@ -165,6 +169,20 @@ def _selected_examples(uploaded: object | None, use_builtin: bool):
     return parse_gold_jsonl(uploaded.getvalue().decode("utf-8-sig"))
 
 
+def _builtin_engine(engine: RAGEngine) -> RAGEngine:
+    if "builtin_benchmark_store" not in st.session_state:
+        st.session_state.builtin_benchmark_store = VectorStoreManager(
+            engine.store.client,
+            engine.store.embedding_model,
+            f"builtin{uuid.uuid4().hex}",
+        )
+    return RAGEngine(
+        st.session_state.builtin_benchmark_store,
+        engine.provider,
+        engine.config,
+    )
+
+
 def render_gold_dashboard(engine: RAGEngine) -> None:
     st.header("Benchmark Lab")
     st.caption(
@@ -201,11 +219,15 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
         value=False,
         help="Public synthetic corpus for repeatable engineering QA. It does not replace your domain's human labels.",
     )
+    active_engine = _builtin_engine(engine) if use_builtin else engine
     if use_builtin:
+        st.caption(
+            "The built-in corpus uses a dedicated isolated Chroma collection, so it cannot mix with documents you uploaded in Ask & verify."
+        )
         if st.button("Load built-in benchmark corpus", use_container_width=True):
-            documents, chunks = load_builtin_corpus(engine.store, engine.config)
+            documents, chunks = load_builtin_corpus(active_engine.store, active_engine.config)
             if documents:
-                st.success(f"Indexed {documents} benchmark documents / {chunks} chunks in this isolated session.")
+                st.success(f"Indexed {documents} benchmark documents / {chunks} chunks in the isolated benchmark collection.")
             else:
                 st.info("Built-in benchmark corpus is already indexed in this session.")
 
@@ -257,26 +279,26 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
     config_cols = st.columns(4)
     retrieval_mode = config_cols[0].selectbox(
         "Retrieval",
-        ["hybrid", "dense", "lexical"],
-        index=["hybrid", "dense", "lexical"].index(engine.config.retrieval_mode),
+        ["dense", "hybrid", "lexical"],
+        index=["dense", "hybrid", "lexical"].index(active_engine.config.retrieval_mode),
     )
-    top_k = config_cols[1].slider("Top-K evidence", 1, 12, int(engine.config.top_k))
+    top_k = config_cols[1].slider("Top-K evidence", 1, 12, int(active_engine.config.top_k))
     threshold = config_cols[2].slider(
-        "Similarity gate", 0.0, 1.0, float(engine.config.similarity_threshold), 0.01
+        "Similarity gate", 0.0, 1.0, float(active_engine.config.similarity_threshold), 0.01
     )
     dense_weight = config_cols[3].slider(
-        "Hybrid dense weight", 0.0, 1.0, float(engine.config.hybrid_dense_weight), 0.05,
+        "Hybrid dense weight", 0.0, 1.0, float(active_engine.config.hybrid_dense_weight), 0.05,
         disabled=retrieval_mode != "hybrid",
     )
     rerank_weight = st.slider(
-        "Transparent reranker weight", 0.0, 0.50, float(engine.config.rerank_weight), 0.05,
+        "Transparent reranker weight", 0.0, 0.50, float(active_engine.config.rerank_weight), 0.05,
         disabled=retrieval_mode != "hybrid",
         help="Interpretable blend of BM25, RRF, query-term coverage and phrase match; not a learned cross-encoder.",
     )
     variant = st.text_input("Run / ablation name", value="v0.2-candidate")
     model_id = st.text_input(
         "Model for this full benchmark",
-        value=engine.provider.model,
+        value=active_engine.provider.model,
         help="For controlled model comparison. Leave unchanged to use the live app model.",
     )
     controls = st.columns(3)
@@ -288,7 +310,7 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
     ) if examples else 0
 
     experiment_config = replace(
-        engine.config,
+        active_engine.config,
         retrieval_mode=retrieval_mode,
         top_k=int(top_k),
         similarity_threshold=float(threshold),
@@ -296,11 +318,15 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
         rerank_weight=float(rerank_weight),
     )
 
+    st.caption(
+        "Retrieval-only experiments use `expected_standalone_query` when supplied so retrieval can be measured independently of rewrite quality. Full runs evaluate the actual conversational rewrite."
+    )
+
     st.markdown("### P0 · Calibration and baseline")
-    calibrate_disabled = not examples or engine.store.count() == 0
+    calibrate_disabled = not examples or active_engine.store.count() == 0
     if st.button("Calibrate similarity threshold (retrieval-only)", disabled=calibrate_disabled):
         try:
-            lab_engine = RAGEngine(engine.store, engine.provider, experiment_config)
+            lab_engine = RAGEngine(active_engine.store, active_engine.provider, experiment_config)
             st.session_state.gold_threshold_results = threshold_sweep(
                 examples,
                 lab_engine,
@@ -324,7 +350,7 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
     ablation_cols = st.columns(2)
     if ablation_cols[0].button("Run dense vs lexical vs hybrid ablation", disabled=calibrate_disabled):
         try:
-            lab_engine = RAGEngine(engine.store, engine.provider, experiment_config)
+            lab_engine = RAGEngine(active_engine.store, active_engine.provider, experiment_config)
             st.session_state.gold_retrieval_ablations = retrieval_ablation(
                 examples,
                 lab_engine,
@@ -340,7 +366,7 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
         help="Re-indexes the small public benchmark corpus in temporary isolated collections.",
     ):
         try:
-            lab_engine = RAGEngine(engine.store, engine.provider, experiment_config)
+            lab_engine = RAGEngine(active_engine.store, active_engine.provider, experiment_config)
             st.session_state.gold_chunk_ablations = chunking_ablation(
                 examples,
                 lab_engine,
@@ -361,14 +387,14 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
         st.dataframe(pd.DataFrame(st.session_state.gold_chunk_ablations), hide_index=True, use_container_width=True)
 
     st.markdown("### Full gold benchmark")
-    if engine.store.count() == 0:
+    if active_engine.store.count() == 0:
         st.info("Index the documents referenced by the gold set before running the full benchmark.")
-    run_disabled = not examples or engine.store.count() == 0
+    run_disabled = not examples or active_engine.store.count() == 0
     if st.button("Run full labelled benchmark", type="primary", disabled=run_disabled, use_container_width=True):
         selected = examples if int(case_limit) == 0 else examples[: int(case_limit)]
         try:
-            provider = engine.provider if model_id.strip() == engine.provider.model else clone_provider_with_model(engine.provider, model_id)
-            lab_engine = RAGEngine(engine.store, provider, experiment_config)
+            provider = active_engine.provider if model_id.strip() == active_engine.provider.model else clone_provider_with_model(active_engine.provider, model_id)
+            lab_engine = RAGEngine(active_engine.store, provider, experiment_config)
             traces = []
             progress = st.progress(0, text="Running labelled cases…")
             for index, example in enumerate(selected, start=1):
@@ -407,7 +433,7 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
     st.markdown("### P2 · Model comparison")
     comparison_models = st.text_area(
         "Model IDs (one per line)",
-        value=engine.provider.model,
+        value=active_engine.provider.model,
         help="Uses the already configured provider credentials. Only model IDs enabled for that provider will work.",
     )
     compare_limit = st.slider("Cases per model", 1, max(1, min(max_cases, 40)), min(10, max(1, max_cases))) if examples else 1
@@ -420,8 +446,8 @@ def render_gold_dashboard(engine: RAGEngine) -> None:
             progress = st.progress(0, text="Running model comparison…")
             try:
                 for model_index, candidate_model in enumerate(models, start=1):
-                    provider = clone_provider_with_model(engine.provider, candidate_model)
-                    lab_engine = RAGEngine(engine.store, provider, experiment_config)
+                    provider = clone_provider_with_model(active_engine.provider, candidate_model)
+                    lab_engine = RAGEngine(active_engine.store, provider, experiment_config)
                     traces = [lab_engine.execute(example.query, example.history) for example in selected]
                     run = evaluate_run(
                         selected,
