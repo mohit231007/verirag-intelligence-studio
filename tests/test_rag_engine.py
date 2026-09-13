@@ -10,7 +10,7 @@ class FakeStore:
     def count(self):
         return len(self.retrieved)
 
-    def query(self, query_text, top_k):
+    def query(self, query_text, top_k, **kwargs):
         return self.retrieved[:top_k]
 
 

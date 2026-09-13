@@ -7,6 +7,10 @@ import streamlit as st
 from core.models import QueryTrace
 
 
+def _score(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.1%}"
+
+
 def render_evidence(trace: QueryTrace) -> None:
     st.subheader("Evidence")
     if not trace.retrieved:
@@ -20,4 +24,15 @@ def render_evidence(trace: QueryTrace) -> None:
         )
         with st.expander(label, expanded=source_number == 1):
             st.markdown(item.chunk.text)
-            st.caption(f"Chunk `{item.chunk.chunk_id}` · rank {item.rank}")
+            st.caption(
+                f"Chunk `{item.chunk.chunk_id}` · rank {item.rank} · method {item.retrieval_method}"
+            )
+            if item.retrieval_method == "hybrid":
+                st.caption(
+                    "Dense "
+                    + _score(item.dense_score)
+                    + " · lexical "
+                    + _score(item.lexical_score)
+                    + " · final rerank "
+                    + _score(item.rerank_score)
+                )
