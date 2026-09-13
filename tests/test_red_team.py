@@ -1,6 +1,6 @@
 from core.config import AppConfig
 from core.models import DocumentChunk, RetrievedChunk
-from core.rag_engine import RAGEngine, SYSTEM_PROMPT
+from core.rag_engine import SYSTEM_PROMPT, RAGEngine
 
 
 class CaptureProvider:
