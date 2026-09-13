@@ -47,3 +47,7 @@ ignore = ["E501"]
 # gold_eval intentionally keeps typing.Iterable/Sequence and a quoted classmethod return
 # compatible with the project's Python 3.11 floor while using future annotations.
 "core/gold_eval.py" = ["UP035", "UP037"]
+# These cleanup paths deliberately swallow teardown failures: cleanup must not mask a
+# completed user action or benchmark result when an ephemeral Chroma collection is gone.
+"app.py" = ["SIM105"]
+"core/benchmark_lab.py" = ["SIM105"]
