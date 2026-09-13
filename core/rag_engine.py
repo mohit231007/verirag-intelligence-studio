@@ -15,7 +15,7 @@ from .citations import (
 from .config import AppConfig
 from .evaluator import citation_coverage, deterministic_metrics
 from .models import QueryTrace, RetrievedChunk
-from .providers import ChatProvider, ProviderError
+from .providers import ChatProvider, ProviderError, UsageSnapshot
 from .vector_store import VectorStoreManager
 
 NO_DOCUMENTS = "Upload and process at least one supported document before asking a question."
@@ -77,7 +77,15 @@ def _trim_retrieved_chunk(item: RetrievedChunk, text: str) -> RetrievedChunk:
         text=text,
         char_end=min(item.chunk.char_end, item.chunk.char_start + len(text)),
     )
-    return RetrievedChunk(trimmed, item.similarity, item.rank)
+    return RetrievedChunk(
+        trimmed,
+        item.similarity,
+        item.rank,
+        dense_score=item.dense_score,
+        lexical_score=item.lexical_score,
+        rerank_score=item.rerank_score,
+        retrieval_method=item.retrieval_method,
+    )
 
 
 def _build_context(
@@ -144,21 +152,78 @@ def _evidence_confidence(
     )
 
 
+def _provider_usage(provider: ChatProvider) -> UsageSnapshot:
+    snapshot = getattr(provider, "usage_snapshot", None)
+    if callable(snapshot):
+        try:
+            value = snapshot()
+            if isinstance(value, UsageSnapshot):
+                return value
+        except Exception:
+            pass
+    return UsageSnapshot()
+
+
+def _attach_efficiency(
+    trace: QueryTrace,
+    before: UsageSnapshot,
+    provider: ChatProvider,
+    config: AppConfig,
+) -> None:
+    usage = _provider_usage(provider).minus(before)
+    if usage.total_tokens <= 0:
+        return
+    trace.prompt_tokens = usage.prompt_tokens
+    trace.completion_tokens = usage.completion_tokens
+    trace.total_tokens = usage.total_tokens
+    if config.input_cost_per_million_usd > 0 or config.output_cost_per_million_usd > 0:
+        trace.estimated_cost_usd = round(
+            usage.prompt_tokens / 1_000_000 * config.input_cost_per_million_usd
+            + usage.completion_tokens / 1_000_000 * config.output_cost_per_million_usd,
+            8,
+        )
+
+
 class RAGEngine:
     def __init__(self, store: VectorStoreManager, provider: ChatProvider, config: AppConfig):
         self.store = store
         self.provider = provider
         self.config = config
 
+    def retrieve_candidates(
+        self,
+        standalone_query: str,
+        *,
+        top_k: int | None = None,
+        mode: str | None = None,
+    ) -> list[RetrievedChunk]:
+        """Retrieve without generation; used by calibration and ablation experiments."""
+
+        requested = top_k or self.config.top_k * self.config.candidate_multiplier
+        return self.store.query(
+            standalone_query,
+            requested,
+            mode=mode or self.config.retrieval_mode,
+            dense_weight=self.config.hybrid_dense_weight,
+            rerank_weight=self.config.rerank_weight,
+            rrf_k=self.config.rrf_k,
+            lexical_candidate_limit=self.config.lexical_candidate_limit,
+        )
+
     def execute(
         self, query: str, history: Sequence[dict[str, str]] = ()
     ) -> QueryTrace:
         started = time.perf_counter()
+        usage_before = _provider_usage(self.provider)
         query = query.strip()[:2_000]
         if not query:
-            return self._refusal(query, query, "empty_query", "Please enter a question.", started)
+            trace = self._refusal(query, query, "empty_query", "Please enter a question.", started)
+            _attach_efficiency(trace, usage_before, self.provider, self.config)
+            return trace
         if self.store.count() == 0:
-            return self._refusal(query, query, "no_documents", NO_DOCUMENTS, started)
+            trace = self._refusal(query, query, "no_documents", NO_DOCUMENTS, started)
+            _attach_efficiency(trace, usage_before, self.provider, self.config)
+            return trace
 
         rewrite_failed = False
         try:
@@ -168,9 +233,9 @@ class RAGEngine:
             rewrite_failed = True
 
         retrieval_started = time.perf_counter()
-        candidates = self.store.query(
+        candidates = self.retrieve_candidates(
             standalone,
-            self.config.top_k * self.config.candidate_multiplier,
+            top_k=self.config.top_k * self.config.candidate_multiplier,
         )
         retrieval_ms = (time.perf_counter() - retrieval_started) * 1_000
         top_score = candidates[0].similarity if candidates else -1.0
@@ -185,7 +250,10 @@ class RAGEngine:
             )
             trace.rewrite_failed = rewrite_failed
             trace.retrieval_ms = round(retrieval_ms, 1)
+            trace.retrieval_mode = self.config.retrieval_mode
+            trace.top_similarity = round(top_score, 4) if candidates else None
             trace.metrics = deterministic_metrics(trace, self.config.similarity_threshold)
+            _attach_efficiency(trace, usage_before, self.provider, self.config)
             return trace
 
         evidence = [
@@ -292,6 +360,8 @@ class RAGEngine:
             citation_validation_error=validation_error,
             citation_repair_attempted=citation_repair_attempted,
             rewrite_failed=rewrite_failed,
+            retrieval_mode=self.config.retrieval_mode,
+            top_similarity=round(top_score, 4) if candidates else None,
         )
         trace.metrics = deterministic_metrics(trace, self.config.similarity_threshold)
         trace.confidence = _confidence(
@@ -305,6 +375,7 @@ class RAGEngine:
                 self.config.similarity_threshold,
                 float(trace.metrics["citation_coverage"] or 0.0),
             )
+        _attach_efficiency(trace, usage_before, self.provider, self.config)
         return trace
 
     def _refusal(
@@ -327,4 +398,5 @@ class RAGEngine:
             total_ms=round((time.perf_counter() - started) * 1_000, 1),
             provider=self.provider.name,
             model=self.provider.model,
+            retrieval_mode=self.config.retrieval_mode,
         )
