@@ -46,7 +46,7 @@ class AppConfig:
     similarity_threshold: float = 0.40
     top_k: int = 4
     candidate_multiplier: int = 3
-    retrieval_mode: str = "hybrid"
+    retrieval_mode: str = "dense"
     hybrid_dense_weight: float = 0.60
     rerank_weight: float = 0.20
     rrf_k: int = 60
@@ -74,7 +74,7 @@ def load_config() -> AppConfig:
     if provider not in {"groq", "ollama"}:
         raise ValueError("VERIRAG_PROVIDER must be either 'groq' or 'ollama'")
 
-    retrieval_mode = os.getenv("VERIRAG_RETRIEVAL_MODE", "hybrid").strip().lower()
+    retrieval_mode = os.getenv("VERIRAG_RETRIEVAL_MODE", "dense").strip().lower()
     if retrieval_mode not in {"dense", "hybrid", "lexical"}:
         raise ValueError("VERIRAG_RETRIEVAL_MODE must be dense, hybrid, or lexical")
 
