@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import math
 import uuid
-from dataclasses import asdict, replace
+from collections.abc import Sequence
+from dataclasses import replace
 from statistics import mean
-from typing import Any, Sequence
+from typing import Any
 
 from .builtin_benchmark import BENCHMARK_DOCUMENTS
 from .gold_eval import BenchmarkRun, GoldExample, compare_runs
