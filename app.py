@@ -118,6 +118,12 @@ def process_file(
 
 def reset_session(store: VectorStoreManager) -> None:
     store.clear()
+    builtin_store = st.session_state.pop("builtin_benchmark_store", None)
+    if builtin_store is not None:
+        try:
+            builtin_store.client.delete_collection(builtin_store.collection_name)
+        except Exception:
+            pass
     st.session_state.messages = []
     st.session_state.traces = []
     st.session_state.gold_benchmark_runs = []
@@ -143,7 +149,7 @@ st.markdown(
     <div class="hero">
       <span class="eyebrow">ENTERPRISE DOCUMENT INTELLIGENCE · v0.2</span>
       <h1>Ask the document. Inspect the proof. Measure the system.</h1>
-      <p>Conversational evidence-gated RAG with hybrid retrieval, auditable traces, gold-grounded benchmarking, calibration, ablations and red-team QA.</p>
+      <p>Conversational evidence-gated RAG with dense, lexical and hybrid retrieval, auditable traces, gold-grounded benchmarking, calibration, ablations and red-team QA.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -211,26 +217,32 @@ with st.sidebar:
         st.caption("Documents: " + ", ".join(names))
 
     with st.expander("Retrieval controls", expanded=False):
-        retrieval_modes = ["hybrid", "dense", "lexical"]
+        retrieval_modes = ["dense", "hybrid", "lexical"]
         current_mode = str(st.session_state.retrieval_mode)
         if current_mode not in retrieval_modes:
-            current_mode = "hybrid"
+            current_mode = "dense"
         st.session_state.retrieval_mode = st.selectbox(
             "Retrieval strategy",
             retrieval_modes,
             index=retrieval_modes.index(current_mode),
-            help="Hybrid combines dense similarity, BM25 lexical retrieval, reciprocal-rank fusion and transparent reranking.",
+            help=(
+                "Dense remains the safe default until labelled evaluation justifies a change. "
+                "Hybrid combines dense similarity, BM25, reciprocal-rank fusion and transparent reranking."
+            ),
         )
         st.session_state.top_k = st.slider(
             "Evidence chunks", 1, 8, int(st.session_state.top_k)
         )
         st.session_state.threshold = st.slider(
-            "Similarity gate",
+            "Evidence score gate",
             0.0,
             1.0,
             float(st.session_state.threshold),
             0.01,
-            help="Calibrate this on a labelled evaluation set before production use.",
+            help=(
+                "For dense retrieval this is cosine similarity; lexical and hybrid modes use their final normalized retrieval score. "
+                "Calibrate separately for each strategy on labelled data."
+            ),
         )
         hybrid_disabled = st.session_state.retrieval_mode != "hybrid"
         st.session_state.hybrid_dense_weight = st.slider(
@@ -368,7 +380,7 @@ with chat_tab:
         else:
             st.subheader("Evidence")
             st.caption(
-                "Retrieved passages will appear here with source, page, chunk, similarity and retrieval provenance."
+                "Retrieved passages will appear here with source, page, chunk, score and retrieval provenance."
             )
 
 with diagnostics_tab:
@@ -382,9 +394,9 @@ with about_tab:
     st.markdown(
         """
         1. Files are validated, normalized, split at semantic boundaries, and assigned deterministic IDs.
-        2. A session-specific Chroma collection prevents document mixing between visitors.
+        2. A session-specific Chroma collection prevents document mixing between visitors; the built-in benchmark uses a second isolated collection.
         3. Retrieval can run as dense, lexical BM25, or hybrid dense + BM25 + reciprocal-rank fusion + transparent reranking.
-        4. Retrieval must cross the configured similarity gate before generation is allowed; the gate can be calibrated against labelled data.
+        4. Retrieval must cross its configured evidence-score gate before generation is allowed; each retrieval strategy should be calibrated separately against labelled data.
         5. Conversational follow-ups are rewritten to a standalone question; both the rewrite and fallback state are auditable.
         6. Document text is fenced as untrusted evidence and cannot redefine system instructions.
         7. Generated citations are normalized and validated; one bounded repair is attempted before a safe refusal.
