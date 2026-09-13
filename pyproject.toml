@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "verirag-intelligence-studio"
-version = "0.1.0"
-description = "Evidence-gated, auditable document intelligence application"
+version = "0.2.0"
+description = "Evidence-gated, auditable document intelligence and RAG evaluation workbench"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
