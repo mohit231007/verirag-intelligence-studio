@@ -116,8 +116,7 @@ class VectorStoreManager:
         scores = bm25_scores(query_text, [chunk.text for chunk in chunks])
         ordered = sorted(
             zip(chunks, scores, strict=True),
-            key=lambda item: item[1],
-            reverse=True,
+            key=lambda item: (-item[1], item[0].chunk_id),
         )[: max(1, min(top_k, len(chunks)))]
         return [
             RetrievedChunk(
@@ -155,7 +154,7 @@ class VectorStoreManager:
         lexical_rank = {item.chunk.chunk_id: item.rank for item in lexical}
 
         merged: list[RetrievedChunk] = []
-        for chunk_id in dense_map.keys() | lexical_map.keys():
+        for chunk_id in sorted(dense_map.keys() | lexical_map.keys()):
             dense_item = dense_map.get(chunk_id)
             lexical_item = lexical_map.get(chunk_id)
             item = dense_item or lexical_item
@@ -189,7 +188,7 @@ class VectorStoreManager:
                 )
             )
 
-        merged.sort(key=lambda item: item.similarity, reverse=True)
+        merged.sort(key=lambda item: (-item.similarity, item.chunk.chunk_id))
         return [
             RetrievedChunk(
                 item.chunk,
