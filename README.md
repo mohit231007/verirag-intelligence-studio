@@ -2,7 +2,7 @@
 
 **Ask the document. Inspect the proof. Measure the system.**
 
-VeriRAG Studio is a bounded, auditable conversational RAG application and evaluation workbench. It ingests PDF, DOCX, TXT, Markdown, and CSV files; retrieves page-aware evidence; refuses weakly supported questions; validates generated source IDs; captures an auditable trace; and now includes labelled benchmarking, calibration, retrieval/chunking ablations, red-team QA, model comparison, regression gates, and efficiency telemetry.
+VeriRAG Studio is a bounded, auditable conversational RAG application and evaluation workbench. It ingests PDF, DOCX, TXT, Markdown, and CSV files; retrieves page-aware evidence; refuses weakly supported questions; validates generated source IDs; captures an auditable trace; and includes labelled benchmarking, calibration, retrieval/chunking ablations, red-team QA, model comparison, regression gates, and efficiency telemetry.
 
 > The original concept says “Zero Hallucinations.” No probabilistic system can honestly guarantee that. VeriRAG instead makes unsupported answers harder to produce, visible when they occur, and measurable in evaluation.
 
@@ -10,10 +10,10 @@ VeriRAG Studio is a bounded, auditable conversational RAG application and evalua
 
 VeriRAG v0.2 moves from “RAG with observability” toward a measurable RAG engineering platform.
 
-- **Hybrid retrieval:** choose dense retrieval, lexical BM25, or hybrid dense + BM25 retrieval.
+- **Multiple retrieval strategies:** choose dense retrieval, lexical BM25, or hybrid dense + BM25 retrieval. Dense remains the shipped default until labelled evaluation demonstrates a better strategy for the target corpus.
 - **Transparent reranking:** hybrid mode combines dense similarity, BM25, reciprocal-rank fusion, query-term coverage, and phrase-match signals without introducing another hosted model.
-- **Label-derived threshold calibration:** sweep the similarity gate and select a threshold from answerability labels instead of treating `0.40` as universally correct.
-- **Retrieval ablations:** compare dense vs lexical vs hybrid, Top-K values, and similarity gates without paying for generation.
+- **Label-derived gate calibration:** sweep the evidence-score gate and select a threshold from answerability labels instead of treating `0.40` as universally correct. Calibrate each retrieval strategy separately because its score semantics differ.
+- **Retrieval ablations:** compare dense vs lexical vs hybrid, Top-K values, and evidence gates without paying for generation.
 - **Chunking ablations:** re-index the built-in public benchmark corpus into temporary isolated collections and compare chunk size / overlap combinations.
 - **Built-in regression/red-team suite:** 150+ curated synthetic cases cover answerable questions, safe refusals, conversational coreference, multi-document/versioned policies, and prompt-injection evidence. It is explicitly **not** a substitute for human-labelled domain gold.
 - **Human-gold benchmark:** uploaded labelled JSONL remains the source of truth for real domain accuracy.
@@ -26,8 +26,8 @@ VeriRAG v0.2 moves from “RAG with observability” toward a measurable RAG eng
 
 ## Core product controls
 
-- **Evidence before generation:** the LLM is not called for an answer unless retrieval crosses a configurable similarity gate.
-- **Session isolation:** every browser session uses a separate Chroma collection, avoiding cross-user document leakage on the public demo.
+- **Evidence before generation:** the LLM is not called for an answer unless retrieval crosses a configurable evidence-score gate.
+- **Session isolation:** every browser session uses a separate Chroma collection, and the built-in benchmark uses a second isolated collection so regression data cannot mix with user documents.
 - **Prompt-injection resistance:** retrieved text is treated as untrusted evidence and fenced away from system instructions.
 - **Citation integrity:** generation uses structured claim-to-source mappings; every rendered factual bullet receives validated IDs such as `[S1]`, with one bounded repair before safe refusal.
 - **Conversational retrieval:** short-history follow-ups are rewritten to a standalone question, and rewrite fallback is recorded in the trace.
@@ -47,7 +47,7 @@ flowchart TD
     RET -->|Dense| D
     RET -->|Lexical BM25| LEX["BM25"]
     RET -->|Hybrid| H["Dense + BM25 + RRF + transparent rerank"]
-    D --> G{"Evidence gate"}
+    D --> G{"Evidence-score gate"}
     LEX --> G
     H --> G
     G -->|below threshold| X["Safe refusal"]
@@ -57,7 +57,7 @@ flowchart TD
     V -->|valid| O["Answer + evidence + trace"]
     O --> E["Live diagnostics"]
     GOLD["Human-labelled JSONL"] --> LAB["Benchmark Lab"]
-    SYN["Built-in synthetic regression suite"] --> LAB
+    SYN["Isolated built-in synthetic regression suite"] --> LAB
     O --> LAB
     LAB --> M["Accuracy · retrieval · citations · calibration · slices · red-team · regressions · efficiency"]
 ```
@@ -100,11 +100,11 @@ The **Diagnostics** tab reports runtime signals such as:
 - citation coverage;
 - citation-ID validity;
 - query-term coverage using the standalone conversational query;
-- context-precision proxy against the configured similarity gate;
+- context-precision proxy against the configured evidence gate;
 - retrieval / generation / total latency;
 - optional model-based faithfulness auditing.
 
-These are observability signals, not accuracy. A high similarity score or 100% citation coverage does not prove the answer is correct.
+These are observability signals, not accuracy. A high retrieval score or 100% citation coverage does not prove the answer is correct.
 
 ### 2. Benchmark Lab — labels required for accuracy
 
@@ -112,6 +112,8 @@ The **Benchmark Lab** can use either:
 
 1. **your human-labelled JSONL** — the appropriate source of truth for domain accuracy; or
 2. **VeriRAG's built-in curated synthetic regression suite** — useful for repeatable engineering QA, security drills, and ablations, but not a production-accuracy claim.
+
+The built-in corpus is indexed in its own session-isolated Chroma collection and therefore cannot contaminate documents loaded in **Ask & verify**.
 
 A full labelled run measures:
 
@@ -134,9 +136,11 @@ Calibration and retrieval ablations do not need generation. That means you can c
 
 - Is hybrid retrieval actually better than dense-only?
 - Does Top-K 6 improve Recall@K enough to justify more context?
-- Which similarity gate best separates answerable from unanswerable cases?
+- Which evidence-score gate best separates answerable from unanswerable cases for each retrieval strategy?
 - Does a smaller chunk size improve retrieval?
 - Does the transparent reranker help or hurt?
+
+Retrieval-only experiments use the labelled `expected_standalone_query` where available to isolate retrieval quality from query-rewrite quality. Full benchmark runs use the actual conversational rewrite path.
 
 ### 4. Model comparison
 
@@ -166,7 +170,7 @@ Prefer `expected_chunk_ids` over `expected_source_docs` when exact chunk-level l
 
 ## Red / blue-team design
 
-The built-in suite includes malicious evidence text that attempts to override application instructions. Blue-team controls are tested by asking legitimate questions about the same document and verifying that the system answers from factual evidence rather than obeying the embedded command. The suite also checks safe refusal, outdated/current policy conflicts, conversational ambiguity, and multi-document retrieval.
+The built-in suite includes malicious evidence text that attempts to override application instructions. Blue-team controls are tested by asking legitimate questions about the same document and verifying that the system answers from factual evidence rather than obeying the embedded command. The deterministic test suite also verifies that the malicious instruction remains in the untrusted evidence/user channel and never enters the system prompt. The benchmark additionally checks safe refusal, outdated/current policy conflicts, conversational ambiguity, and multi-document retrieval.
 
 The application still has explicit security boundaries: it is a public portfolio demo, not a certified environment for secrets, regulated data, or confidential enterprise documents.
 
@@ -194,8 +198,8 @@ The automated suite uses deterministic fakes and does not require live provider 
 | `GROQ_MODEL` | `openai/gpt-oss-120b` | Hosted generation model |
 | `OLLAMA_MODEL` | `llama3.2:3b` | Local generation model |
 | `VERIRAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | FastEmbed model |
-| `VERIRAG_RETRIEVAL_MODE` | `hybrid` | `dense`, `lexical`, or `hybrid` |
-| `VERIRAG_SIMILARITY_THRESHOLD` | `0.40` | Evidence gate; calibrate on labels |
+| `VERIRAG_RETRIEVAL_MODE` | `dense` | Safe shipped default; `dense`, `lexical`, or `hybrid` |
+| `VERIRAG_SIMILARITY_THRESHOLD` | `0.40` | Historical env name for evidence-score gate; calibrate per strategy |
 | `VERIRAG_TOP_K` | `4` | Evidence passages shown to the LLM |
 | `VERIRAG_HYBRID_DENSE_WEIGHT` | `0.60` | Dense share of hybrid base score |
 | `VERIRAG_RERANK_WEIGHT` | `0.20` | Transparent reranker contribution |
@@ -208,7 +212,7 @@ The automated suite uses deterministic fakes and does not require live provider 
 | `VERIRAG_INPUT_COST_PER_MILLION_USD` | `0` | Optional explicit input-token price |
 | `VERIRAG_OUTPUT_COST_PER_MILLION_USD` | `0` | Optional explicit output-token price |
 
-Similarity scores are retrieval-strategy and corpus dependent. The shipped `0.40` is a starting point, not a universal optimum.
+Scores are retrieval-strategy and corpus dependent. The shipped `0.40` is a starting point for dense retrieval, not a universal optimum and not automatically transferable to lexical or hybrid retrieval.
 
 ## Repository map
 
@@ -229,13 +233,14 @@ core/gold_eval.py                   Ground-truth evaluation and calibration
 core/benchmark_lab.py               Ablations, slices, red-team summary, regression gate
 core/builtin_benchmark.py           Public curated synthetic regression corpus and labels
 sample_evals/                       Human-gold template
- tests/                             Unit/regression tests with no live model calls
+tests/                              Unit/regression tests with no live model calls
 ```
 
 ## Security and privacy boundaries
 
 - Uploaded bytes are processed in memory and are not intentionally written to disk.
 - Collections are ephemeral and session-scoped, but a public Streamlit host is not a certified confidential-document environment.
+- The built-in benchmark uses a separate session-isolated collection and is deleted when the session is reset.
 - File extension checks, decompression bounds, and resource limits reduce risk; they are not a substitute for malware scanning in a regulated deployment.
 - Benchmark uploads can contain sensitive labels or expected answers; treat them with the same caution as source documents.
 - Token cost is not guessed from provider marketing pages. It is shown only when explicit rates are configured.
