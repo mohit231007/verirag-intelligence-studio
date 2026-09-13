@@ -85,6 +85,12 @@ def test_bm25_prioritizes_exact_lexical_evidence() -> None:
     assert scores[0] == 1.0
 
 
+def test_stopword_only_query_cannot_create_lexical_false_positive() -> None:
+    docs = ["The policy is active.", "This is another document."]
+    assert bm25_scores("what is the policy of this", docs) == [1.0, 0.0]
+    assert bm25_scores("what is the and of this", docs) == [0.0, 0.0]
+
+
 def test_transparent_reranker_rewards_query_coverage() -> None:
     strong = transparent_rerank_score(
         "refund manager approval",
@@ -122,3 +128,15 @@ def test_vector_store_supports_dense_lexical_and_hybrid_modes() -> None:
     assert hybrid[0].dense_score is not None
     assert hybrid[0].lexical_score is not None
     assert hybrid[0].rerank_score is not None
+
+
+def test_lexical_ties_are_stable_by_chunk_id() -> None:
+    store = VectorStoreManager(FakeClient(), FakeEmbeddings(), "tie-test")
+    store.add_chunks([
+        _chunk("z-last", "policy alpha"),
+        _chunk("a-first", "policy alpha"),
+    ])
+    first = [item.chunk.chunk_id for item in store.query("policy alpha", 2, mode="lexical")]
+    second = [item.chunk.chunk_id for item in store.query("policy alpha", 2, mode="lexical")]
+    assert first == ["a-first", "z-last"]
+    assert second == first
