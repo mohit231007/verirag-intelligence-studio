@@ -46,6 +46,11 @@ class AppConfig:
     similarity_threshold: float = 0.40
     top_k: int = 4
     candidate_multiplier: int = 3
+    retrieval_mode: str = "hybrid"
+    hybrid_dense_weight: float = 0.60
+    rerank_weight: float = 0.20
+    rrf_k: int = 60
+    lexical_candidate_limit: int = 40
     chunk_size_chars: int = 1_800
     chunk_overlap_chars: int = 220
     max_file_bytes: int = 5 * 1024 * 1024
@@ -54,6 +59,8 @@ class AppConfig:
     max_chunks_per_session: int = 1_500
     max_context_chars: int = 16_000
     request_timeout_seconds: int = 60
+    input_cost_per_million_usd: float = 0.0
+    output_cost_per_million_usd: float = 0.0
 
     @property
     def provider_ready(self) -> bool:
@@ -66,6 +73,10 @@ def load_config() -> AppConfig:
     provider = os.getenv("VERIRAG_PROVIDER", "groq").strip().lower()
     if provider not in {"groq", "ollama"}:
         raise ValueError("VERIRAG_PROVIDER must be either 'groq' or 'ollama'")
+
+    retrieval_mode = os.getenv("VERIRAG_RETRIEVAL_MODE", "hybrid").strip().lower()
+    if retrieval_mode not in {"dense", "hybrid", "lexical"}:
+        raise ValueError("VERIRAG_RETRIEVAL_MODE must be dense, hybrid, or lexical")
 
     chunk_size = _as_int("VERIRAG_CHUNK_SIZE_CHARS", 1_800, 400, 8_000)
     overlap = _as_int("VERIRAG_CHUNK_OVERLAP_CHARS", 220, 0, 2_000)
@@ -85,6 +96,11 @@ def load_config() -> AppConfig:
         similarity_threshold=_as_float("VERIRAG_SIMILARITY_THRESHOLD", 0.40, 0.0, 1.0),
         top_k=_as_int("VERIRAG_TOP_K", 4, 1, 12),
         candidate_multiplier=_as_int("VERIRAG_CANDIDATE_MULTIPLIER", 3, 1, 10),
+        retrieval_mode=retrieval_mode,
+        hybrid_dense_weight=_as_float("VERIRAG_HYBRID_DENSE_WEIGHT", 0.60, 0.0, 1.0),
+        rerank_weight=_as_float("VERIRAG_RERANK_WEIGHT", 0.20, 0.0, 1.0),
+        rrf_k=_as_int("VERIRAG_RRF_K", 60, 1, 500),
+        lexical_candidate_limit=_as_int("VERIRAG_LEXICAL_CANDIDATES", 40, 5, 500),
         chunk_size_chars=chunk_size,
         chunk_overlap_chars=overlap,
         max_file_bytes=_as_int("VERIRAG_MAX_FILE_MB", 5, 1, 25) * 1024 * 1024,
@@ -93,4 +109,10 @@ def load_config() -> AppConfig:
         max_chunks_per_session=_as_int("VERIRAG_MAX_CHUNKS", 1_500, 10, 10_000),
         max_context_chars=_as_int("VERIRAG_MAX_CONTEXT_CHARS", 16_000, 2_000, 100_000),
         request_timeout_seconds=_as_int("VERIRAG_REQUEST_TIMEOUT", 60, 5, 300),
+        input_cost_per_million_usd=_as_float(
+            "VERIRAG_INPUT_COST_PER_MILLION_USD", 0.0, 0.0, 1_000.0
+        ),
+        output_cost_per_million_usd=_as_float(
+            "VERIRAG_OUTPUT_COST_PER_MILLION_USD", 0.0, 0.0, 1_000.0
+        ),
     )
