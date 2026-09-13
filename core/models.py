@@ -34,6 +34,10 @@ class RetrievedChunk:
     chunk: DocumentChunk
     similarity: float
     rank: int
+    dense_score: float | None = None
+    lexical_score: float | None = None
+    rerank_score: float | None = None
+    retrieval_method: str = "dense"
 
 
 @dataclass(slots=True)
@@ -56,6 +60,12 @@ class QueryTrace:
     citation_validation_error: str | None = None
     citation_repair_attempted: bool = False
     rewrite_failed: bool = False
+    retrieval_mode: str = "dense"
+    top_similarity: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
     metrics: dict[str, Any] = field(default_factory=dict)
 
 
