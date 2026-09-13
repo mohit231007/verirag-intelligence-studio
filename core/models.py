@@ -45,6 +45,7 @@ class QueryTrace:
     is_refusal: bool = False
     refusal_reason: str | None = None
     confidence: str = "Low"
+    confidence_score: float | None = None
     retrieval_ms: float = 0.0
     generation_ms: float = 0.0
     total_ms: float = 0.0
@@ -54,6 +55,7 @@ class QueryTrace:
     generated_answer: str | None = None
     citation_validation_error: str | None = None
     citation_repair_attempted: bool = False
+    rewrite_failed: bool = False
     metrics: dict[str, Any] = field(default_factory=dict)
 
 

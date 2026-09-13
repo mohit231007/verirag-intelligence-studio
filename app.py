@@ -14,6 +14,7 @@ from fastembed import TextEmbedding
 
 from components.eval_dashboard import render_dashboard
 from components.evidence_panel import render_evidence
+from components.gold_eval_dashboard import render_gold_dashboard
 from core.config import AppConfig, load_config
 from core.ingestion import DocumentParseError, ingest_document
 from core.models import QueryTrace
@@ -61,6 +62,7 @@ def initialize_state(config: AppConfig) -> None:
         "session_id": uuid.uuid4().hex,
         "messages": [],
         "traces": [],
+        "gold_benchmark_runs": [],
         "processed_hashes": set(),
         "ingestion_warnings": [],
         "persona": "Executive",
@@ -82,7 +84,9 @@ def get_store(config: AppConfig) -> VectorStoreManager:
     return st.session_state.vector_store
 
 
-def process_file(name: str, content: bytes, store: VectorStoreManager, config: AppConfig) -> tuple[bool, str]:
+def process_file(
+    name: str, content: bytes, store: VectorStoreManager, config: AppConfig
+) -> tuple[bool, str]:
     result = ingest_document(
         content,
         name,
@@ -100,13 +104,17 @@ def process_file(name: str, content: bytes, store: VectorStoreManager, config: A
     store.add_chunks(result.chunks)
     st.session_state.processed_hashes.add(result.document_hash)
     st.session_state.ingestion_warnings.extend(result.warnings)
-    return True, f"Indexed {result.filename}: {result.pages} page(s), {len(result.chunks)} chunks."
+    return (
+        True,
+        f"Indexed {result.filename}: {result.pages} page(s), {len(result.chunks)} chunks.",
+    )
 
 
 def reset_session(store: VectorStoreManager) -> None:
     store.clear()
     st.session_state.messages = []
     st.session_state.traces = []
+    st.session_state.gold_benchmark_runs = []
     st.session_state.processed_hashes = set()
     st.session_state.ingestion_warnings = []
 
@@ -126,7 +134,7 @@ st.markdown(
     <div class="hero">
       <span class="eyebrow">ENTERPRISE DOCUMENT INTELLIGENCE</span>
       <h1>Ask the document. Inspect the proof.</h1>
-      <p>Session-isolated retrieval, evidence-gated answers, and auditable source traces.</p>
+      <p>Session-isolated retrieval, evidence-gated answers, auditable source traces, and gold-grounded evaluation.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -135,6 +143,10 @@ st.markdown(
 with st.sidebar:
     st.markdown("## VeriRAG Studio")
     st.caption("A portfolio-grade, bounded RAG reference implementation")
+    st.warning(
+        "Public demo: use non-sensitive documents and labels only. "
+        "Do not upload confidential or protected data."
+    )
     st.session_state.persona = st.radio(
         "View",
         ["Executive", "Technical"],
@@ -147,27 +159,39 @@ with st.sidebar:
         "Upload PDF, DOCX, TXT, Markdown, or CSV",
         type=["pdf", "docx", "txt", "md", "csv"],
         accept_multiple_files=True,
-        help=f"Up to {config.max_files} files; {config.max_file_bytes // (1024 * 1024)} MB each.",
+        help=(
+            f"Up to {config.max_files} files; "
+            f"{config.max_file_bytes // (1024 * 1024)} MB each."
+        ),
     )
     upload_disabled = not uploads or len(uploads) > config.max_files
     if uploads and len(uploads) > config.max_files:
         st.error(f"Select at most {config.max_files} files at a time.")
     if st.button(
-        "Process selected files", type="primary", use_container_width=True, disabled=upload_disabled
+        "Process selected files",
+        type="primary",
+        use_container_width=True,
+        disabled=upload_disabled,
     ):
         for uploaded in uploads or []:
             try:
-                added, message = process_file(uploaded.name, uploaded.getvalue(), store, config)
+                added, message = process_file(
+                    uploaded.name, uploaded.getvalue(), store, config
+                )
                 (st.success if added else st.info)(message)
             except (UploadValidationError, DocumentParseError) as exc:
                 st.error(str(exc))
             except Exception:
-                st.error(f"Could not index {uploaded.name}. The file may be malformed or unsupported.")
+                st.error(
+                    f"Could not index {uploaded.name}. The file may be malformed or unsupported."
+                )
 
     sample_path = Path(__file__).parent / "sample_docs" / "retail_promotion_policy.txt"
     if st.button("Load sample policy", use_container_width=True):
         try:
-            added, message = process_file(sample_path.name, sample_path.read_bytes(), store, config)
+            added, message = process_file(
+                sample_path.name, sample_path.read_bytes(), store, config
+            )
             (st.success if added else st.info)(message)
         except (UploadValidationError, DocumentParseError) as exc:
             st.error(str(exc))
@@ -178,7 +202,9 @@ with st.sidebar:
         st.caption("Documents: " + ", ".join(names))
 
     with st.expander("Retrieval controls"):
-        st.session_state.top_k = st.slider("Evidence chunks", 1, 8, int(st.session_state.top_k))
+        st.session_state.top_k = st.slider(
+            "Evidence chunks", 1, 8, int(st.session_state.top_k)
+        )
         st.session_state.threshold = st.slider(
             "Similarity gate",
             0.0,
@@ -200,7 +226,9 @@ runtime_config = replace(
 )
 engine = RAGEngine(store, provider, runtime_config)
 
-chat_tab, diagnostics_tab, about_tab = st.tabs(["Ask & verify", "Diagnostics", "Architecture"])
+chat_tab, diagnostics_tab, gold_tab, about_tab = st.tabs(
+    ["Ask & verify", "Diagnostics", "Gold benchmark", "Architecture"]
+)
 
 with chat_tab:
     main_column, evidence_column = st.columns([1.65, 1], gap="large")
@@ -211,7 +239,9 @@ with chat_tab:
                 "`VERIRAG_PROVIDER=ollama` for local inference."
             )
         if not st.session_state.messages:
-            st.info("Load the sample policy or upload a document, then ask a question grounded in it.")
+            st.info(
+                "Load the sample policy or upload a document, then ask a question grounded in it."
+            )
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
@@ -230,18 +260,28 @@ with chat_tab:
                     with st.spinner("Retrieving evidence and validating the answer…"):
                         trace = engine.execute(prompt, previous)
                     st.markdown(trace.answer)
-                st.session_state.messages.append({"role": "assistant", "content": trace.answer})
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": trace.answer}
+                )
                 st.session_state.traces.append(trace)
                 st.rerun()
             except ProviderError as exc:
                 st.error(str(exc))
             except Exception:
-                st.error("The query could not be completed. Review provider configuration and try again.")
+                st.error(
+                    "The query could not be completed. Review provider configuration and try again."
+                )
 
         if st.session_state.traces:
             latest: QueryTrace = st.session_state.traces[-1]
-            status = "Safe refusal" if latest.is_refusal else f"{latest.confidence} confidence"
-            st.caption(f"Outcome: {status} · {latest.total_ms / 1_000:.2f}s total")
+            status = (
+                "Safe refusal"
+                if latest.is_refusal
+                else f"{latest.confidence} confidence"
+            )
+            st.caption(
+                f"Outcome: {status} · {latest.total_ms / 1_000:.2f}s total"
+            )
             download_columns = st.columns(2)
             with download_columns[0]:
                 st.download_button(
@@ -264,11 +304,13 @@ with chat_tab:
                     st.json(
                         {
                             "standalone_query": latest.standalone_query,
+                            "rewrite_failed": latest.rewrite_failed,
                             "retrieval_ms": latest.retrieval_ms,
                             "generation_ms": latest.generation_ms,
                             "provider": latest.provider,
                             "model": latest.model,
                             "refusal_reason": latest.refusal_reason,
+                            "confidence_score": latest.confidence_score,
                             "citation_validation_error": latest.citation_validation_error,
                             "citation_repair_attempted": latest.citation_repair_attempted,
                             "metrics": latest.metrics,
@@ -280,10 +322,15 @@ with chat_tab:
             render_evidence(st.session_state.traces[-1])
         else:
             st.subheader("Evidence")
-            st.caption("Retrieved passages will appear here with source, page, chunk, and similarity.")
+            st.caption(
+                "Retrieved passages will appear here with source, page, chunk, and similarity."
+            )
 
 with diagnostics_tab:
     render_dashboard(st.session_state.traces, provider)
+
+with gold_tab:
+    render_gold_dashboard(engine)
 
 with about_tab:
     st.header("How the answer path is controlled")
@@ -292,9 +339,11 @@ with about_tab:
         1. Files are validated, normalized, split at semantic boundaries, and assigned deterministic IDs.
         2. A session-specific Chroma collection prevents document mixing between visitors.
         3. Retrieval must cross the configured cosine-similarity gate before generation is allowed.
-        4. Document text is fenced as untrusted evidence and cannot redefine system instructions.
-        5. Generated citations are normalized and validated; one bounded repair is attempted before a safe refusal.
-        6. Every completed query retains a local trace with evidence and latency diagnostics.
+        4. Conversational follow-ups are rewritten to a standalone question; both the rewrite and fallback state are auditable.
+        5. Document text is fenced as untrusted evidence and cannot redefine system instructions.
+        6. Generated citations are normalized and validated; one bounded repair is attempted before a safe refusal.
+        7. Live diagnostics remain label-free proxies, while the Gold benchmark measures actual labelled accuracy, retrieval, citation correctness, calibration, failure modes and regressions.
+        8. Every completed query retains a local trace with evidence and latency diagnostics.
 
         This design reduces unsupported answers; it does not claim that any probabilistic model can guarantee zero hallucinations.
         """
