@@ -63,11 +63,17 @@ def initialize_state(config: AppConfig) -> None:
         "messages": [],
         "traces": [],
         "gold_benchmark_runs": [],
+        "gold_threshold_results": [],
+        "gold_retrieval_ablations": [],
+        "gold_chunk_ablations": [],
         "processed_hashes": set(),
         "ingestion_warnings": [],
         "persona": "Executive",
         "threshold": config.similarity_threshold,
         "top_k": config.top_k,
+        "retrieval_mode": config.retrieval_mode,
+        "hybrid_dense_weight": config.hybrid_dense_weight,
+        "rerank_weight": config.rerank_weight,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -115,6 +121,9 @@ def reset_session(store: VectorStoreManager) -> None:
     st.session_state.messages = []
     st.session_state.traces = []
     st.session_state.gold_benchmark_runs = []
+    st.session_state.gold_threshold_results = []
+    st.session_state.gold_retrieval_ablations = []
+    st.session_state.gold_chunk_ablations = []
     st.session_state.processed_hashes = set()
     st.session_state.ingestion_warnings = []
 
@@ -132,9 +141,9 @@ provider = build_provider(config)
 st.markdown(
     """
     <div class="hero">
-      <span class="eyebrow">ENTERPRISE DOCUMENT INTELLIGENCE</span>
-      <h1>Ask the document. Inspect the proof.</h1>
-      <p>Session-isolated retrieval, evidence-gated answers, auditable source traces, and gold-grounded evaluation.</p>
+      <span class="eyebrow">ENTERPRISE DOCUMENT INTELLIGENCE · v0.2</span>
+      <h1>Ask the document. Inspect the proof. Measure the system.</h1>
+      <p>Conversational evidence-gated RAG with hybrid retrieval, auditable traces, gold-grounded benchmarking, calibration, ablations and red-team QA.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -142,7 +151,7 @@ st.markdown(
 
 with st.sidebar:
     st.markdown("## VeriRAG Studio")
-    st.caption("A portfolio-grade, bounded RAG reference implementation")
+    st.caption("A bounded RAG engineering and evaluation workbench")
     st.warning(
         "Public demo: use non-sensitive documents and labels only. "
         "Do not upload confidential or protected data."
@@ -201,7 +210,17 @@ with st.sidebar:
     if names:
         st.caption("Documents: " + ", ".join(names))
 
-    with st.expander("Retrieval controls"):
+    with st.expander("Retrieval controls", expanded=False):
+        retrieval_modes = ["hybrid", "dense", "lexical"]
+        current_mode = str(st.session_state.retrieval_mode)
+        if current_mode not in retrieval_modes:
+            current_mode = "hybrid"
+        st.session_state.retrieval_mode = st.selectbox(
+            "Retrieval strategy",
+            retrieval_modes,
+            index=retrieval_modes.index(current_mode),
+            help="Hybrid combines dense similarity, BM25 lexical retrieval, reciprocal-rank fusion and transparent reranking.",
+        )
         st.session_state.top_k = st.slider(
             "Evidence chunks", 1, 8, int(st.session_state.top_k)
         )
@@ -213,6 +232,23 @@ with st.sidebar:
             0.01,
             help="Calibrate this on a labelled evaluation set before production use.",
         )
+        hybrid_disabled = st.session_state.retrieval_mode != "hybrid"
+        st.session_state.hybrid_dense_weight = st.slider(
+            "Hybrid dense weight",
+            0.0,
+            1.0,
+            float(st.session_state.hybrid_dense_weight),
+            0.05,
+            disabled=hybrid_disabled,
+        )
+        st.session_state.rerank_weight = st.slider(
+            "Transparent reranker weight",
+            0.0,
+            0.50,
+            float(st.session_state.rerank_weight),
+            0.05,
+            disabled=hybrid_disabled,
+        )
 
     st.caption(f"Provider: {config.provider} · Model: {provider.model}")
     if st.button("Reset this session", use_container_width=True):
@@ -223,11 +259,14 @@ runtime_config = replace(
     config,
     top_k=int(st.session_state.top_k),
     similarity_threshold=float(st.session_state.threshold),
+    retrieval_mode=str(st.session_state.retrieval_mode),
+    hybrid_dense_weight=float(st.session_state.hybrid_dense_weight),
+    rerank_weight=float(st.session_state.rerank_weight),
 )
 engine = RAGEngine(store, provider, runtime_config)
 
 chat_tab, diagnostics_tab, gold_tab, about_tab = st.tabs(
-    ["Ask & verify", "Diagnostics", "Gold benchmark", "Architecture"]
+    ["Ask & verify", "Diagnostics", "Benchmark Lab", "Architecture"]
 )
 
 with chat_tab:
@@ -280,7 +319,7 @@ with chat_tab:
                 else f"{latest.confidence} confidence"
             )
             st.caption(
-                f"Outcome: {status} · {latest.total_ms / 1_000:.2f}s total"
+                f"Outcome: {status} · {latest.total_ms / 1_000:.2f}s total · retrieval: {latest.retrieval_mode}"
             )
             download_columns = st.columns(2)
             with download_columns[0]:
@@ -305,10 +344,16 @@ with chat_tab:
                         {
                             "standalone_query": latest.standalone_query,
                             "rewrite_failed": latest.rewrite_failed,
+                            "retrieval_mode": latest.retrieval_mode,
+                            "top_similarity": latest.top_similarity,
                             "retrieval_ms": latest.retrieval_ms,
                             "generation_ms": latest.generation_ms,
                             "provider": latest.provider,
                             "model": latest.model,
+                            "prompt_tokens": latest.prompt_tokens,
+                            "completion_tokens": latest.completion_tokens,
+                            "total_tokens": latest.total_tokens,
+                            "estimated_cost_usd": latest.estimated_cost_usd,
                             "refusal_reason": latest.refusal_reason,
                             "confidence_score": latest.confidence_score,
                             "citation_validation_error": latest.citation_validation_error,
@@ -323,7 +368,7 @@ with chat_tab:
         else:
             st.subheader("Evidence")
             st.caption(
-                "Retrieved passages will appear here with source, page, chunk, and similarity."
+                "Retrieved passages will appear here with source, page, chunk, similarity and retrieval provenance."
             )
 
 with diagnostics_tab:
@@ -338,12 +383,14 @@ with about_tab:
         """
         1. Files are validated, normalized, split at semantic boundaries, and assigned deterministic IDs.
         2. A session-specific Chroma collection prevents document mixing between visitors.
-        3. Retrieval must cross the configured cosine-similarity gate before generation is allowed.
-        4. Conversational follow-ups are rewritten to a standalone question; both the rewrite and fallback state are auditable.
-        5. Document text is fenced as untrusted evidence and cannot redefine system instructions.
-        6. Generated citations are normalized and validated; one bounded repair is attempted before a safe refusal.
-        7. Live diagnostics remain label-free proxies, while the Gold benchmark measures actual labelled accuracy, retrieval, citation correctness, calibration, failure modes and regressions.
-        8. Every completed query retains a local trace with evidence and latency diagnostics.
+        3. Retrieval can run as dense, lexical BM25, or hybrid dense + BM25 + reciprocal-rank fusion + transparent reranking.
+        4. Retrieval must cross the configured similarity gate before generation is allowed; the gate can be calibrated against labelled data.
+        5. Conversational follow-ups are rewritten to a standalone question; both the rewrite and fallback state are auditable.
+        6. Document text is fenced as untrusted evidence and cannot redefine system instructions.
+        7. Generated citations are normalized and validated; one bounded repair is attempted before a safe refusal.
+        8. Live diagnostics remain label-free proxies, while Benchmark Lab measures labelled accuracy, retrieval, citations, refusal quality, calibration, slices, red-team behaviour, efficiency and regressions.
+        9. Retrieval and chunking ablations can be run without generation; full benchmark and model-comparison runs are kept separate because they consume provider quota.
+        10. Token telemetry is captured where the provider exposes usage; cost is estimated only when explicit token prices are configured.
 
         This design reduces unsupported answers; it does not claim that any probabilistic model can guarantee zero hallucinations.
         """
