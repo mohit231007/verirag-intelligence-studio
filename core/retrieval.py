@@ -15,10 +15,50 @@ from collections import Counter
 from collections.abc import Sequence
 
 _TOKEN = re.compile(r"[a-zA-Z0-9]+")
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "do",
+    "does",
+    "for",
+    "from",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+}
 
 
 def tokenize(text: str) -> list[str]:
-    return [match.group(0).lower() for match in _TOKEN.finditer(text)]
+    """Tokenize for lexical retrieval while removing high-frequency query scaffolding."""
+
+    return [
+        token
+        for match in _TOKEN.finditer(text)
+        if (token := match.group(0).lower()) not in _STOPWORDS
+    ]
 
 
 def bm25_scores(
