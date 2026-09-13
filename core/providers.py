@@ -15,6 +15,20 @@ class ProviderError(RuntimeError):
     """A sanitized error safe to display in the application."""
 
 
+@dataclass(frozen=True, slots=True)
+class UsageSnapshot:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    def minus(self, earlier: "UsageSnapshot") -> "UsageSnapshot":
+        return UsageSnapshot(
+            max(0, self.prompt_tokens - earlier.prompt_tokens),
+            max(0, self.completion_tokens - earlier.completion_tokens),
+            max(0, self.total_tokens - earlier.total_tokens),
+        )
+
+
 def groq_error_message(error: Exception) -> str:
     """Translate Groq HTTP failures without exposing credentials or response bodies."""
 
@@ -38,6 +52,8 @@ class ChatProvider(Protocol):
 
     def complete(self, system_prompt: str, user_prompt: str, *, temperature: float = 0.0) -> str: ...
 
+    def usage_snapshot(self) -> UsageSnapshot: ...
+
 
 @dataclass(slots=True)
 class GroqProvider:
@@ -45,6 +61,12 @@ class GroqProvider:
     model: str
     timeout_seconds: int = 60
     name: str = "groq"
+    _prompt_tokens: int = 0
+    _completion_tokens: int = 0
+    _total_tokens: int = 0
+
+    def usage_snapshot(self) -> UsageSnapshot:
+        return UsageSnapshot(self._prompt_tokens, self._completion_tokens, self._total_tokens)
 
     def complete(self, system_prompt: str, user_prompt: str, *, temperature: float = 0.0) -> str:
         if not self.api_key:
@@ -61,6 +83,14 @@ class GroqProvider:
                 ],
                 temperature=temperature,
             )
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+                completion = int(getattr(usage, "completion_tokens", 0) or 0)
+                total = int(getattr(usage, "total_tokens", prompt + completion) or prompt + completion)
+                self._prompt_tokens += prompt
+                self._completion_tokens += completion
+                self._total_tokens += total
             content = response.choices[0].message.content
             if not content:
                 raise ProviderError("The model returned an empty response")
@@ -77,6 +107,12 @@ class OllamaProvider:
     model: str
     timeout_seconds: int = 60
     name: str = "ollama"
+    _prompt_tokens: int = 0
+    _completion_tokens: int = 0
+    _total_tokens: int = 0
+
+    def usage_snapshot(self) -> UsageSnapshot:
+        return UsageSnapshot(self._prompt_tokens, self._completion_tokens, self._total_tokens)
 
     def complete(self, system_prompt: str, user_prompt: str, *, temperature: float = 0.0) -> str:
         payload = json.dumps(
@@ -99,6 +135,11 @@ class OllamaProvider:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 body = json.loads(response.read().decode("utf-8"))
+            prompt = int(body.get("prompt_eval_count", 0) or 0)
+            completion = int(body.get("eval_count", 0) or 0)
+            self._prompt_tokens += prompt
+            self._completion_tokens += completion
+            self._total_tokens += prompt + completion
             content = body.get("message", {}).get("content", "").strip()
             if not content:
                 raise ProviderError("Ollama returned an empty response")
@@ -113,3 +154,16 @@ def build_provider(config: AppConfig) -> ChatProvider:
     if config.provider == "ollama":
         return OllamaProvider(config.ollama_base_url, config.ollama_model, config.request_timeout_seconds)
     return GroqProvider(config.groq_api_key, config.groq_model, config.request_timeout_seconds)
+
+
+def clone_provider_with_model(provider: ChatProvider, model: str) -> ChatProvider:
+    """Clone a configured provider for controlled model-comparison experiments."""
+
+    model = model.strip()
+    if not model:
+        raise ValueError("Model ID cannot be empty")
+    if isinstance(provider, GroqProvider):
+        return GroqProvider(provider.api_key, model, provider.timeout_seconds)
+    if isinstance(provider, OllamaProvider):
+        return OllamaProvider(provider.base_url, model, provider.timeout_seconds)
+    raise ValueError("This provider cannot be cloned for model comparison")
