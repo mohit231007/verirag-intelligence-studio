@@ -19,7 +19,7 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
     st.header("RAG diagnostics")
     st.caption(
         "These are transparent live diagnostics, not ground-truth accuracy or RAGAS scores. "
-        "Use the Gold benchmark tab for labelled accuracy, retrieval, calibration and regressions."
+        "Use Benchmark Lab for labelled accuracy, retrieval, calibration, ablations and regressions."
     )
     if not traces:
         st.info("Ask a question to create the first auditable trace.")
@@ -38,9 +38,7 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
             with st.spinner("Auditing claims against retrieved evidence…"):
                 judgment = judge_faithfulness(latest, provider)
             latest.metrics["llm_faithfulness"] = judgment.score
-            latest.metrics["unsupported_claims"] = list(
-                judgment.unsupported_claims
-            )
+            latest.metrics["unsupported_claims"] = list(judgment.unsupported_claims)
             latest.metrics["judge_reasoning"] = judgment.reasoning
             if judgment.score is None:
                 latest.metrics["llm_faithfulness_status"] = "not_applicable"
@@ -104,6 +102,22 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
     if judge_notice:
         getattr(st, judge_notice[0])(judge_notice[1])
 
+    telemetry_cols = st.columns(4)
+    telemetry_cols[0].metric("Retrieval", latest.retrieval_mode)
+    telemetry_cols[1].metric(
+        "Top retrieval score",
+        "N/A" if latest.top_similarity is None else f"{latest.top_similarity:.1%}",
+    )
+    telemetry_cols[2].metric(
+        "Total tokens",
+        "N/A" if latest.total_tokens is None else f"{latest.total_tokens:,}",
+    )
+    telemetry_cols[3].metric(
+        "Estimated cost",
+        "N/A" if latest.estimated_cost_usd is None else f"${latest.estimated_cost_usd:.6f}",
+        help="Only calculated when explicit token prices are configured; VeriRAG does not guess model pricing.",
+    )
+
     rows = []
     for trace in reversed(traces):
         rows.append(
@@ -111,18 +125,19 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
                 "Query": trace.query,
                 "Standalone query": trace.standalone_query,
                 "Rewrite fallback": trace.rewrite_failed,
+                "Retrieval": trace.retrieval_mode,
                 "Grounding outcome": (
                     "Safe refusal" if trace.is_refusal else "Citation-validated"
                 ),
                 "Confidence": trace.confidence,
                 "Evidence confidence": trace.confidence_score,
-                "Top similarity": max(
-                    (item.similarity for item in trace.retrieved), default=None
-                ),
+                "Top score": trace.top_similarity,
                 "Retrieved": len(trace.retrieved),
                 "Retrieval ms": trace.retrieval_ms,
                 "Generation ms": trace.generation_ms,
                 "Total ms": trace.total_ms,
+                "Tokens": trace.total_tokens,
+                "Estimated cost USD": trace.estimated_cost_usd,
             }
         )
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -132,8 +147,14 @@ def render_dashboard(traces: list[QueryTrace], provider: ChatProvider) -> None:
             {
                 "standalone_query": latest.standalone_query,
                 "rewrite_failed": latest.rewrite_failed,
+                "retrieval_mode": latest.retrieval_mode,
+                "top_similarity": latest.top_similarity,
                 "provider": latest.provider,
                 "model": latest.model,
+                "prompt_tokens": latest.prompt_tokens,
+                "completion_tokens": latest.completion_tokens,
+                "total_tokens": latest.total_tokens,
+                "estimated_cost_usd": latest.estimated_cost_usd,
                 "refusal_reason": latest.refusal_reason,
                 "confidence_score": latest.confidence_score,
                 "invalid_citations": latest.invalid_citations,
