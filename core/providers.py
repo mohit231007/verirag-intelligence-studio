@@ -21,7 +21,7 @@ class UsageSnapshot:
     completion_tokens: int = 0
     total_tokens: int = 0
 
-    def minus(self, earlier: "UsageSnapshot") -> "UsageSnapshot":
+    def minus(self, earlier: UsageSnapshot) -> UsageSnapshot:
         return UsageSnapshot(
             max(0, self.prompt_tokens - earlier.prompt_tokens),
             max(0, self.completion_tokens - earlier.completion_tokens),
